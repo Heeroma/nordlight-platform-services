@@ -1,0 +1,307 @@
+groups:
+  - name: ml_platform_training
+    interval: 30s
+    rules:
+      # =========================================================================
+      # Regime Training Alerts (Priority 1)
+      # =========================================================================
+      
+      - alert: HighRegimeTrainingFailureRate
+        expr: |
+          rate(ml_platform_regime_training_failures_total[10m]) > 0.5
+        for: 5m
+        labels:
+          severity: critical
+          service: ml-platform
+          component: regime-training
+        annotations:
+          summary: "High regime training failure rate"
+          description: "Regime training failure rate is {{ $value | humanize }} failures per second. Check logs and Data Platform connectivity."
+          runbook: "https://github.com/Heeroma/fasttrader/blob/main/services/ml-platform/docs/RUNBOOKS.md#regime-training-failures"
+
+      - alert: RegimeModelAccuracyLow
+        expr: |
+          ml_platform_regime_model_accuracy < 0.70
+        for: 5m
+        labels:
+          severity: warning
+          service: ml-platform
+          component: regime-training
+        annotations:
+          summary: "Regime model accuracy below threshold"
+          description: "{{ $labels.model_name }} v{{ $labels.version }} accuracy is {{ $value | humanizePercentage }}. Expected >70%."
+          runbook: "https://github.com/Heeroma/fasttrader/blob/main/services/ml-platform/docs/RUNBOOKS.md#low-model-accuracy"
+
+      - alert: RegimeTrainingDurationAnomaly
+        expr: |
+          histogram_quantile(0.95, 
+            rate(ml_platform_regime_training_duration_seconds_bucket[10m])
+          ) > 3600
+        for: 10m
+        labels:
+          severity: info
+          service: ml-platform
+          component: regime-training
+        annotations:
+          summary: "Regime training taking longer than usual"
+          description: "P95 training duration for {{ $labels.model_name }} is {{ $value | humanizeDuration }} (expected <1h)"
+
+      - alert: RegimeDataFetchSlow
+        expr: |
+          histogram_quantile(0.95, 
+            rate(ml_platform_regime_data_fetch_duration_seconds_bucket[5m])
+          ) > 30
+        for: 5m
+        labels:
+          severity: warning
+          service: ml-platform
+          component: data-platform-integration
+        annotations:
+          summary: "Regime training data fetch is slow"
+          description: "P95 data fetch latency is {{ $value | humanizeDuration }}. Check Data Platform performance."
+
+      # =========================================================================
+      # General Training Alerts
+      # =========================================================================
+      
+      - alert: HighTrainingFailureRate
+        expr: |
+          (
+            sum(rate(ml_platform_training_jobs_total{status="failed"}[10m])) / 
+            sum(rate(ml_platform_training_jobs_total[10m]))
+          ) > 0.3
+        for: 5m
+        labels:
+          severity: warning
+          service: ml-platform
+          component: training
+        annotations:
+          summary: "High training job failure rate"
+          description: "Training failure rate is {{ $value | humanizePercentage }}. Expected <30%."
+
+      - alert: TooManyConcurrentTrainingJobs
+        expr: |
+          sum(ml_platform_training_active_jobs) > 10
+        for: 10m
+        labels:
+          severity: warning
+          service: ml-platform
+          component: training
+        annotations:
+          summary: "Too many concurrent training jobs"
+          description: "{{ $value }} training jobs are running concurrently. This may cause resource contention."
+
+  - name: ml_platform_inference
+    interval: 30s
+    rules:
+      # =========================================================================
+      # Inference Performance Alerts
+      # =========================================================================
+      
+      - alert: HighInferenceLatency
+        expr: |
+          histogram_quantile(0.99, 
+            rate(ml_platform_inference_duration_seconds_bucket[5m])
+          ) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          service: ml-platform
+          component: inference
+        annotations:
+          summary: "High inference P99 latency"
+          description: "P99 inference latency for {{ $labels.model_name }} is {{ $value | humanizeDuration }}. Expected <500ms."
+
+      - alert: HighInferenceErrorRate
+        expr: |
+          (
+            rate(ml_platform_inference_requests_total{status="error"}[5m]) / 
+            rate(ml_platform_inference_requests_total[5m])
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+          service: ml-platform
+          component: inference
+        annotations:
+          summary: "High inference error rate"
+          description: "Inference error rate for {{ $labels.model_name }} is {{ $value | humanizePercentage }}. Expected <5%."
+
+  - name: ml_platform_registry
+    interval: 30s
+    rules:
+      # =========================================================================
+      # Model Registry Alerts
+      # =========================================================================
+      
+      - alert: LowProductionModelCount
+        expr: |
+          sum(ml_platform_model_versions_total{status="production"}) < 3
+        for: 30m
+        labels:
+          severity: warning
+          service: ml-platform
+          component: registry
+        annotations:
+          summary: "Low number of production models"
+          description: "Only {{ $value }} models are in production. Expected at least 3 (Trend, Risk, Volatility)."
+
+      - alert: LargeModelArtifacts
+        expr: |
+          ml_platform_model_artifacts_size_bytes > 1073741824
+        for: 10m
+        labels:
+          severity: info
+          service: ml-platform
+          component: storage
+        annotations:
+          summary: "Large model artifacts detected"
+          description: "{{ $labels.model_name }} artifacts are {{ $value | humanize1024 }}B. Consider model compression."
+
+  - name: ml_platform_infrastructure
+    interval: 30s
+    rules:
+      # =========================================================================
+      # Data Platform Integration Alerts
+      # =========================================================================
+      
+      - alert: DataPlatformHighRetryRate
+        expr: |
+          rate(ml_platform_data_platform_retries_total[5m]) > 1
+        for: 5m
+        labels:
+          severity: warning
+          service: ml-platform
+          component: data-platform-integration
+        annotations:
+          summary: "High retry rate to Data Platform"
+          description: "Retry rate to {{ $labels.endpoint }} is {{ $value | humanize }} per second due to {{ $labels.retry_reason }}."
+
+      - alert: DataPlatformHighErrorRate
+        expr: |
+          (
+            rate(ml_platform_data_platform_requests_total{status="error"}[5m]) / 
+            rate(ml_platform_data_platform_requests_total[5m])
+          ) > 0.1
+        for: 5m
+        labels:
+          severity: critical
+          service: ml-platform
+          component: data-platform-integration
+        annotations:
+          summary: "High error rate from Data Platform"
+          description: "Error rate for {{ $labels.endpoint }} is {{ $value | humanizePercentage }}. Expected <10%."
+
+      # =========================================================================
+      # Database Alerts
+      # =========================================================================
+      
+      - alert: DatabaseConnectionPoolExhausted
+        expr: |
+          (
+            ml_platform_database_connections_active / 
+            (ml_platform_database_connections_active + ml_platform_database_connections_idle)
+          ) > 0.9
+        for: 5m
+        labels:
+          severity: critical
+          service: ml-platform
+          component: database
+        annotations:
+          summary: "Database connection pool nearly exhausted"
+          description: "Connection pool utilization is {{ $value | humanizePercentage }}. Increase pool size or investigate connection leaks."
+
+      - alert: SlowDatabaseQueries
+        expr: |
+          histogram_quantile(0.95, 
+            rate(ml_platform_database_query_duration_seconds_bucket[5m])
+          ) > 1
+        for: 5m
+        labels:
+          severity: warning
+          service: ml-platform
+          component: database
+        annotations:
+          summary: "Slow database queries detected"
+          description: "P95 query latency for {{ $labels.query_type }} is {{ $value | humanizeDuration }}. Check query optimization."
+
+      # =========================================================================
+      # Celery Queue Alerts
+      # =========================================================================
+      
+      - alert: CeleryQueueBacklog
+        expr: |
+          ml_platform_celery_queue_length > 100
+        for: 10m
+        labels:
+          severity: warning
+          service: ml-platform
+          component: celery
+        annotations:
+          summary: "Celery queue has large backlog"
+          description: "{{ $labels.queue }} has {{ $value }} tasks waiting. Scale up workers or investigate slow tasks."
+
+      - alert: CeleryHighTaskFailureRate
+        expr: |
+          (
+            rate(ml_platform_celery_tasks_completed_total{status="failure"}[10m]) / 
+            rate(ml_platform_celery_tasks_completed_total[10m])
+          ) > 0.2
+        for: 5m
+        labels:
+          severity: warning
+          service: ml-platform
+          component: celery
+        annotations:
+          summary: "High Celery task failure rate"
+          description: "Task failure rate for {{ $labels.task_name }} is {{ $value | humanizePercentage }}. Expected <20%."
+
+      # =========================================================================
+      # Storage Alerts
+      # =========================================================================
+      
+      - alert: HighArtifactUploadFailureRate
+        expr: |
+          (
+            rate(ml_platform_artifact_uploads_total{status="error"}[10m]) / 
+            rate(ml_platform_artifact_uploads_total[10m])
+          ) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          service: ml-platform
+          component: storage
+        annotations:
+          summary: "High artifact upload failure rate"
+          description: "Upload failure rate for {{ $labels.artifact_type }} is {{ $value | humanizePercentage }}. Check MinIO/S3 connectivity."
+
+  - name: ml_platform_service_health
+    interval: 60s
+    rules:
+      # =========================================================================
+      # Service Health Alerts
+      # =========================================================================
+      
+      - alert: MLPlatformDown
+        expr: |
+          up{job="ml-platform"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: ml-platform
+          component: service
+        annotations:
+          summary: "ML Platform service is down"
+          description: "ML Platform has been down for more than 1 minute. Check service logs and restart if necessary."
+
+      - alert: MLPlatformHighMemoryUsage
+        expr: |
+          (process_resident_memory_bytes{job="ml-platform"} / 1073741824) > 8
+        for: 10m
+        labels:
+          severity: warning
+          service: ml-platform
+          component: service
+        annotations:
+          summary: "ML Platform high memory usage"
+          description: "ML Platform is using {{ $value | humanize1024 }}B of memory. Check for memory leaks or scale up resources."
